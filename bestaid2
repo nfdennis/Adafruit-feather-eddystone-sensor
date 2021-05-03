@@ -47,7 +47,6 @@ void gotoSleep(unsigned long time)
 
 void broadcastEddystone(void)
 {
-  // TODO wrap this entire broadcastEddystone() in loop to reinit sensor values every second
   bmp280.begin();       // temp barometric pressure
   lsm6ds33.begin_I2C(); // accel gyroscope
   sht30.begin();        // humidity

@@ -14,11 +14,33 @@
 // Sleepydog
 #include <Adafruit_SleepyDog.h>
 
-// Sensor data
+// Sensor data:
 #include <Adafruit_BMP280.h>
 #include <Adafruit_LSM6DS33.h>
 #include <Adafruit_SHT31.h>
 #include <Adafruit_Sensor.h>
+
+// Battery reading code:
+#include <Arduino.h>
+
+#if defined ARDUINO_NRF52840_CIRCUITPLAY
+#define PIN_VBAT A6 // this is just a mock read, we'll use the light sensor, so we can run the test
+#endif
+
+uint32_t vbat_pin = PIN_VBAT; // A7 for feather nRF52832, A6 for nRF52840
+
+#define VBAT_MV_PER_LSB (0.73242188F) // 3.0V ADC range and 12-bit ADC resolution = 3000mV/4096
+
+#ifdef NRF52840_XXAA
+#define VBAT_DIVIDER (0.5F)      // 150K + 150K voltage divider on VBAT
+#define VBAT_DIVIDER_COMP (2.0F) // Compensation factor for the VBAT divider
+#else
+#define VBAT_DIVIDER (0.71275837F) // 2M + 0.806M voltage divider on VBAT = (2M / (0.806M + 2M))
+#define VBAT_DIVIDER_COMP (1.403F) // Compensation factor for the VBAT divider
+#endif
+
+#define REAL_VBAT_MV_PER_LSB (VBAT_DIVIDER_COMP * VBAT_MV_PER_LSB)
+// END battery reading code
 
 Adafruit_BMP280 bmp280;     // temperautre, barometric pressure
 Adafruit_LSM6DS33 lsm6ds33; // accelerometer, gyroscope
@@ -35,8 +57,50 @@ int32_t mic;
 const int led = 12;
 int ledFlag = 0;
 
-#define SLEEPING_DELAY 10000 // sleep after x seconds of blinking/broadcasting
+// Battery reading code:
+float readVBAT(void)
+{
+    float raw;
 
+    // Set the analog reference to 3.0V (default = 3.6V)
+    analogReference(AR_INTERNAL_3_0);
+
+    // Set the resolution to 12-bit (0..4095)
+    analogReadResolution(12); // Can be 8, 10, 12 or 14
+
+    // Let the ADC settle
+    delay(1);
+
+    // Get the raw 12-bit, 0..3000mV ADC value
+    raw = analogRead(vbat_pin);
+
+    // Set the ADC back to the default settings
+    analogReference(AR_DEFAULT);
+    analogReadResolution(10);
+
+    // Convert the raw value to compensated mv, taking the resistor-
+    // divider into account (providing the actual LIPO voltage)
+    // ADC range is 0..3000mV and resolution is 12-bit (0..4095)
+    return raw * REAL_VBAT_MV_PER_LSB;
+}
+
+uint8_t mvToPercent(float mvolts)
+{
+    if (mvolts < 3300)
+        return 0;
+
+    if (mvolts < 3600)
+    {
+        mvolts -= 3300;
+        return mvolts / 30;
+    }
+
+    mvolts -= 3600;
+    return 10 + (mvolts * 0.15F); // thats mvolts /6.66666666
+}
+// END battery reading code
+
+#define SLEEPING_DELAY 10000 // sleep after x seconds of blinking/broadcasting
 void gotoSleep(unsigned long time)
 {
     // shutdown when time reaches SLEEPING_DELAY ms
@@ -83,6 +147,21 @@ void broadcastEddystone(void)
     accel_mag = sqrt(accel_x * accel_x + accel_y * accel_y + accel_z * accel_z);
 
     humidity = sht30.readHumidity();
+
+    // Battery read code:
+    float vbat_mv = readVBAT();
+
+    // Convert from raw mv to percentage (based on LIPO chemistry)
+    uint8_t vbat_per = mvToPercent(vbat_mv);
+
+    // Display the results
+
+    Serial.print("LIPO = ");
+    Serial.print(vbat_mv);
+    Serial.print(" mV (");
+    Serial.print(vbat_per);
+    Serial.println("%)");
+    // END battery read code
 
     /*****************************************/
     Serial.println("\nFeather Sense Sensor Demo");
@@ -169,8 +248,8 @@ void broadcastEddystone(void)
     {
         URL[19] = 'g';
     }
-    URL[20] = '1';
-    URL[21] = '1';
+    URL[20] = String(vbat_per)[0];
+    URL[21] = String(vbat_per)[1];
     URL[22] = '1';
     URL[23] = '1';
     URL[24] = '1';
@@ -206,6 +285,9 @@ void setup()
     // bluefruit init
     Bluefruit.setTxPower(4); // Check bluefruit.h for supported values
     Bluefruit.setName("BESTAID2");
+
+    // battery setup
+    readVBAT();
 }
 
 void loop()
